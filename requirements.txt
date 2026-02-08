@@ -1,0 +1,6 @@
+pyTelegramBotAPI==4.30.0
+playwright==1.58.0
+instaloader==4.15
+yt-dlp==2026.2.4
+moviepy==2.2.1
+pytz==2025.2

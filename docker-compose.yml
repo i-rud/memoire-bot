@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: memoire-bot-app
+    restart: unless-stopped
+
+    env_file:
+      - .env
