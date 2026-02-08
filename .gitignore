@@ -1,1 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+
+# Playwright
+/ms-playwright/
+/playwright-report/
+/test-results/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+
+# Env
 .env
