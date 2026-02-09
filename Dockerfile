@@ -4,7 +4,6 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# Системные зависимости для Chromium
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libnss3 \
@@ -35,7 +34,6 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ВАЖНО: скачиваем браузеры во время build
 RUN playwright install --with-deps chromium
 
 COPY src/ ./src/
