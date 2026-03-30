@@ -1,5 +1,5 @@
-import os
 from playwright.sync_api import sync_playwright
+
 
 TEAM_LOGOS = {
     'ATL': 'https://a.espncdn.com/i/teamlogos/nba/500/atl.png',
@@ -34,162 +34,209 @@ TEAM_LOGOS = {
     'WAS': 'https://a.espncdn.com/i/teamlogos/nba/500/was.png'
 }
 
-class PerformanceElite:
+
+class Performance:
+
+    def _base_styles(self):
+        return """
+        <style>
+            :root {
+                --bg-main: #0B1220;
+                --bg-top: #16233A;
+
+                --primary-blue: #1E5DFF;
+                --accent-red: #E53935;
+
+                --gold: #C9A227;
+                --gold-soft: #E0B84A;
+
+                --text-main: #FFFFFF;
+                --text-muted: rgba(255,255,255,0.65);
+            }
+
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+
+            body {
+                font-family: 'Unbounded', sans-serif;
+                background: radial-gradient(circle at 50% 0%, var(--bg-top) 0%, var(--bg-main) 65%);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+            }
+
+            .player-card {
+                width: 1000px;
+                height: 1000px;
+                display: flex;
+                background: linear-gradient(180deg, #16233A 0%, #0F1A2D 100%);
+                overflow: hidden;
+                position: relative;
+                box-shadow:
+                    0 25px 60px rgba(0,0,0,0.6),
+                    inset 0 0 0 1px rgba(255,255,255,0.04);
+            }
+
+            .player-card::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                height: 4px;
+                width: 100%;
+                background: linear-gradient(90deg, var(--gold), var(--gold-soft));
+            }
+
+            .photo-wrapper {
+                flex: 1;
+                background: #000;
+                overflow: hidden;
+            }
+
+            .player-img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                object-position: center top;
+            }
+
+            .info-wrapper {
+                width: 420px;
+                padding: 70px 55px;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-start;
+            }
+
+            .date {
+                font-size: 13px;
+                font-weight: 700;
+                color: var(--text-muted);
+                letter-spacing: 2px;
+                margin-bottom: 14px;
+                text-transform: uppercase;
+            }
+
+            .player-name {
+                font-size: 48px;
+                font-weight: 900;
+                color: var(--text-main);
+                line-height: 1.05;
+                margin-bottom: 35px;
+                letter-spacing: -2px;
+            }
+
+            .matchup-pill {
+                display: inline-flex;
+                align-items: center;
+                gap: 16px;
+                padding: 10px 22px;
+                border-radius: 999px;
+                background: rgba(255,255,255,0.08);
+                box-shadow: 0 0 18px rgba(30,93,255,0.35);
+                margin-bottom: 60px;
+            }
+
+            .team-logo {
+                width: 38px;
+                height: 38px;
+                object-fit: contain;
+            }
+
+            .stats-container {
+                display: flex;
+                flex-direction: column;
+                gap: 45px;
+            }
+
+            .stat-value {
+                font-size: 100px;
+                font-weight: 900;
+                color: var(--gold);
+                line-height: 1;
+                letter-spacing: -5px;
+            }
+
+            .stat-label {
+                font-size: 20px;
+                font-weight: 700;
+                color: var(--text-muted);
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+        </style>
+        """
+
     def generate_card_right(self, photo_url, stats_string, data):
         items = [item.strip().split(' ', 1) for item in stats_string.split(';')]
-        stats_html = "".join([f"""
-                <div class="stat-block">
-                    <div class="stat-value">{v}</div>
-                    <div class="stat-label">{l}</div>
-                </div>""" for v, l in items])
+        stats_html = "".join(
+            f"""
+            <div>
+                <div class="stat-value">{v}</div>
+                <div class="stat-label">{l}</div>
+            </div>
+            """ for v, l in items
+        )
 
         return f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&display=swap" rel="stylesheet">
-                <style>
-                    :root {{ 
-                        --bg: #2b2624; 
-                        --accent: #e2e8f0; 
-                        --text-main: #ffffff; 
-                        --text-muted: #64748b; 
-                        --pill: #1e293b;
-                    }}
-                    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-                    body {{ font-family: 'Unbounded', sans-serif; background: #000; display: flex; justify-content: center; align-items: center; min-height: 100vh; }}
+        <html>
+        <head>
+            <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&display=swap" rel="stylesheet">
+            {self._base_styles()}
+        </head>
+        <body>
+            <div class="player-card">
+                <div class="photo-wrapper">
+                    <img src="{photo_url}" class="player-img">
+                </div>
+                <div class="info-wrapper">
+                    <div class="date">{data['date']}</div>
+                    <div class="player-name">{data['name'].upper()}</div>
 
-                    .player-card {{ display: flex; width: 1000px; height: 1000px; background: var(--bg); overflow: hidden; position: relative;}}
-                    .photo-wrapper {{ flex: 1; height: 100%; background: #000; overflow: hidden; }}
-                    .player-img {{ width: 100%; height: 100%; object-fit: cover; object-position: center top; filter: grayscale(20%) brightness(0.9); }}
+                    <div class="matchup-pill">
+                        <img src="{data['team_logo']}" class="team-logo">
+                        <span style="color:var(--text-muted); font-weight:900;">VS</span>
+                        <img src="{data['opp_logo']}" class="team-logo">
+                    </div>
 
-                    .info-wrapper {{ 
-                        width: 400px; flex: 0 0 400px; padding: 60px 45px; 
-                        display: flex; flex-direction: column; justify-content: flex-start; 
-                        background: var(--bg);
-                    }}
-
-                    .date {{ font-size: 12px; font-weight: 700; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 12px; text-transform: uppercase; }}
-                    .player-name {{ font-size: 42px; font-weight: 900; color: var(--text-main); line-height: 1.1; margin-bottom: 30px; letter-spacing: -1.5px; }}
-                    .matchup-pill {{ display: inline-flex; align-items: center; gap: 14px; background: var(--pill); padding: 14px 22px; border-radius: 24px; margin-bottom: 50px; width: fit-content; border: 1px solid rgba(255,255,255,0.05); }}
-                    .team-logo {{ width: 36px; height: 36px; object-fit: contain; }}
-
-                    .stats-container {{ display: flex; flex-direction: column; gap: 40px; }}
-                    .stat-block {{ display: flex; flex-direction: column; gap: 4px; }}
-                    .stat-value {{ font-size: 95px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -4px; }}
-                    .stat-label {{ font-size: 19px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; white-space: normal; line-height: 1.2; }}
-                </style>
-            </head>
-            <body>
-                <div class="player-card">
-                    <div class="photo-wrapper"><img src="{photo_url}" class="player-img"></div>
-                    <div class="info-wrapper">
-                        <div class="date">{data['date']}</div>
-                        <h1 class="player-name">{data['name'].upper()}</h1>
-                        <div class="matchup-pill">
-                            <img src="{data['team_logo']}" class="team-logo">
-                            <span style="font-weight:900; color:var(--text-muted);">VS</span>
-                            <img src="{data['opp_logo']}" class="team-logo">
-                        </div>
-                        <div class="stats-container">{stats_html}</div>
+                    <div class="stats-container">
+                        {stats_html}
                     </div>
                 </div>
-            </body>
-            </html>
-            """
-
-    def generate_card_bottom(self, photo_url, stats_string, data):
-        items = [item.strip().split(' ', 1) for item in stats_string.split(';')]
-        stats_html = "".join([f"""
-                <div class="stat-block">
-                    <div class="stat-value">{v}</div>
-                    <div class="stat-label">{l}</div>
-                </div>""" for v, l in items])
-
-        return f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&display=swap" rel="stylesheet">
-                <style>
-                    :root {{ 
-                        --bg: #2b2624; 
-                        --accent: #e2e8f0; 
-                        --text-main: #ffffff; 
-                        --text-muted: #64748b; 
-                        --pill: #1e293b;
-                    }}
-                    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-                    body {{ font-family: 'Unbounded', sans-serif; background: #000; display: flex; justify-content: center; align-items: center; min-height: 100vh; }}
-
-                    .player-card {{ display: flex; flex-direction: column; width: 1000px; height: 1000px; background: var(--bg); overflow: hidden; }}
-                    .photo-wrapper {{ flex: 1; width: 100%; background: #000; overflow: hidden; }}
-                    .player-img {{ width: 100%; height: 100%; object-fit: cover; object-position: center top; filter: grayscale(20%) brightness(0.9); }}
-
-                    .info-wrapper {{ 
-                        height: 350px; flex: 0 0 350px; width: 100%; 
-                        padding: 50px 65px; background: var(--bg);
-                        display: flex; flex-direction: column; justify-content: flex-start;
-                        position: relative;
-                    }}
-
-                    .header-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }}
-                    .player-name {{ font-size: 46px; font-weight: 900; color: var(--text-main); line-height: 1; letter-spacing: -2px; }}
-                    .matchup-pill {{ display: flex; align-items: center; gap: 14px; background: var(--pill); padding: 14px 26px; border-radius: 26px; border: 1px solid rgba(255,255,255,0.05); }}
-                    .team-logo {{ width: 40px; height: 40px; object-fit: contain; }}
-
-                    .stats-container {{ display: flex; justify-content: space-between; width: 100%; gap: 30px; }}
-                    .stat-block {{ flex: 1; display: flex; flex-direction: column; gap: 6px; }}
-
-                    .stat-value {{ font-size: 96px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -5px; }}
-                    .stat-label {{ font-size: 19px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; line-height: 1.2; }}
-                </style>
-            </head>
-            <body>
-                <div class="player-card">
-                    <div class="photo-wrapper"><img src="{photo_url}" class="player-img"></div>
-                    <div class="info-wrapper">
-                        <div class="header-row">
-                            <div>
-                                <div style="font-size: 13px; font-weight: 700; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 10px; text-transform: uppercase;">{data['date']}</div>
-                                <h1 class="player-name">{data['name'].upper()}</h1>
-                            </div>
-                            <div class="matchup-pill">
-                                <img src="{data['team_logo']}" class="team-logo">
-                                <span style="font-weight:900; color:var(--text-muted); margin:0 6px;">VS</span>
-                                <img src="{data['opp_logo']}" class="team-logo">
-                            </div>
-                        </div>
-                        <div class="stats-container">{stats_html}</div>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-    # Метод generate остается без изменений...
+            </div>
+        </body>
+        </html>
+        """
 
     def generate(self, name, date, home, away, url, stats, layout="right"):
         data = {
             'name': name,
             'date': date,
-            'team_logo': TEAM_LOGOS.get(home.upper(), ""),
-            'opp_logo': TEAM_LOGOS.get(away.upper(), ""),
+            'team_logo': TEAM_LOGOS[home.upper()],
+            'opp_logo': TEAM_LOGOS[away.upper()],
         }
 
-        html = self.generate_card_right(url, stats, data) if layout == "right" else self.generate_card_bottom(url,
-                                                                                                              stats,
-                                                                                                              data)
+        if layout == "right":
+            html = self.generate_card_right(url, stats, data)
+        else:
+            html = self.generate_card_bottom(url, stats, data)
 
         with sync_playwright() as p:
             browser = p.chromium.launch()
+
             context = browser.new_context(device_scale_factor=2)
             page = context.new_page()
+
             page.set_content(html)
 
-            os.makedirs("images/performances", exist_ok=True)
-            filename = f"images/performances/performance_elite.png"
+            filename = f"images/performances/performance.png"
             card = page.query_selector(".player-card")
             if card:
                 card.screenshot(path=filename)
                 print(f"Loaded: {filename}")
+
             browser.close()
+
+# if __name__ == "__main__":
+#     performance = Performance()
+#     performance.generate()

@@ -1,3 +1,4 @@
+import os
 from playwright.sync_api import sync_playwright
 
 TEAM_LOGOS = {
@@ -40,6 +41,7 @@ class Performance:
     def __init__(self):
         # Путь к локальному логотипу (замените на свой)
         self.local_logo_path = 'assets/memoire_logo.jpg'
+        self.overlay_logo_url = os.environ.get("OVERLAY_LOGO_URL")
 
     def generate_card_right(self, photo_url, stats_string, data):
         items = [item.strip().split(' ', 1) for item in stats_string.split(';')]
@@ -69,7 +71,7 @@ class Performance:
                         border-left: 1px solid #f1f5f9; background: #f0eee9;
                         position: relative; /* ДЛЯ ПОЗИЦИОНИРОВАНИЯ ЛОГО */
                     }}
-                    
+
                     .brand-logo {{
                         position: absolute;
                         top: 35px;
@@ -82,17 +84,28 @@ class Performance:
 
                     .date {{ font-size: 12px; font-weight: 700; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 12px; }}
                     .player-name {{ font-size: 42px; font-weight: 900; color: var(--text-main); line-height: 1.1; margin-bottom: 30px; letter-spacing: -1.5px; }}
-                    .matchup-pill {{ display: inline-flex; align-items: center; gap: 14px; background: #e6e2d6; padding: 14px 22px; border-radius: 24px; margin-bottom: 50px; width: fit-content; }}
+                    .matchup-pill {{ display: inline-flex; align-items: center; gap: 14px; background: #e6e2d6; padding: 14px 22px; border-radius: 24px; margin-bottom: 50px; width: fit-content; margin-left: auto; }}
                     .team-logo {{ width: 36px; height: 36px; object-fit: contain; }}
 
                     .stats-container {{ display: flex; flex-direction: column; gap: 40px; }}
                     .stat-block {{ display: flex; flex-direction: column; gap: 4px; }}
                     .stat-value {{ font-size: 95px; font-weight: 900; color: var(--accent); line-height: 1; letter-spacing: -4px; }}
                     .stat-label {{ font-size: 20px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; white-space: normal; line-height: 1.2; }}
+
+                    .overlay-logo {{
+                        position: absolute;
+                        top: 35px;
+                        right: 35px;
+                        width: 100px;
+                        height: 100px;
+                        object-fit: contain;
+                        z-index: 10;
+                    }}
                 </style>
             </head>
             <body>
                 <div class="player-card">
+                    {f'<img src="{self.overlay_logo_url}" class="overlay-logo">' if self.overlay_logo_url else ''}
                     <div class="photo-wrapper"><img src="{photo_url}" class="player-img"></div>
                     <div class="info-wrapper">
                         <div class="date">{data['date']}</div>
@@ -137,7 +150,7 @@ class Performance:
                         display: flex; flex-direction: column; justify-content: flex-start;
                          position: relative;
                     }}
-                    
+
                     .brand-logo {{
                         position: absolute;
                         top: 35px;
@@ -149,7 +162,7 @@ class Performance:
 
                     .header-row {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }}
                     .player-name {{ font-size: 46px; font-weight: 900; color: var(--text-main); line-height: 1; letter-spacing: -2px; }}
-                    .matchup-pill {{ display: flex; align-items: center; gap: 14px; background: #e6e2d6; padding: 14px 26px; border-radius: 26px; }}
+                    .matchup-pill {{ display: flex; align-items: center; gap: 14px; background: #e6e2d6; padding: 14px 26px; border-radius: 26px; margin-left: auto; }}
                     .team-logo {{ width: 40px; height: 40px; object-fit: contain; }}
 
                     .stats-container {{ display: flex; justify-content: space-between; width: 100%; gap: 30px; }}
@@ -162,10 +175,21 @@ class Performance:
                         font-size: 20px; font-weight: 700; color: var(--text-muted); 
                         text-transform: uppercase; letter-spacing: 1px; line-height: 1.2;
                     }}
+
+                    .overlay-logo {{
+                        position: absolute;
+                        top: 35px;
+                        right: 35px;
+                        width: 100px;
+                        height: 100px;
+                        object-fit: contain;
+                        z-index: 10;
+                    }}
                 </style>
             </head>
             <body>
                 <div class="player-card">
+                    {f'<img src="{self.overlay_logo_url}" class="overlay-logo">' if self.overlay_logo_url else ''}
                     <div class="photo-wrapper"><img src="{photo_url}" class="player-img"></div>
                     <div class="info-wrapper">
                         <div class="header-row">
@@ -214,7 +238,6 @@ class Performance:
                 print(f"Loaded: {filename}")
 
             browser.close()
-
 
 # if __name__ == "__main__":
 #     performance = Performance()

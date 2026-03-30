@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import os
 from playwright.sync_api import sync_playwright
 
-API_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={}"
+API_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 OUTPUT_DIR = "images/scores"
 
 if not os.path.exists(OUTPUT_DIR):
@@ -15,93 +15,202 @@ class Scores:
     def __init__(self):
         pass
 
-    def generate_html(self, event):
-        comp = event['competitions'][0]
+    def _calculate_performance_rating(self, s):
+        def get_f(key):
+            try:
+                val = s.get(key, '0')
+                if val == '-': return 0.0
+                return float(val)
+            except: return 0.0
 
-        utc_dt = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
+        pts = get_f('points')
+        ast = get_f('assists')
+        stl = get_f('steals')
+        blk = get_f('blocks')
+        tov = get_f('turnovers')
+        pf = get_f('fouls')
+        mins = get_f('minutes')
+        pm = get_f('plusMinus')
+        
+        # Rebounds
+        orb = get_f('offensiveRebounds')
+        drb = get_f('defensiveRebounds')
+        total_reb = get_f('rebounds')
+        if orb == 0 and drb == 0 and total_reb > 0:
+            orb = total_reb * 0.3
+            drb = total_reb * 0.7
+
+        # FGM/FGA
+        fgs = s.get('fieldGoalsMade-fieldGoalsAttempted', '0-0').split('-')
+        fgm = float(fgs[0]) if len(fgs) > 0 else 0.0
+        fga = float(fgs[1]) if len(fgs) > 1 else 0.0
+
+        # FTM/FTA
+        fts = s.get('freeThrowsMade-freeThrowsAttempted', '0-0').split('-')
+        ftm = float(fts[0]) if len(fts) > 0 else 0.0
+        fta = float(fts[1]) if len(fts) > 1 else 0.0
+
+        gs = pts + 0.4*fgm - 0.5*fga - 0.3*(fta-ftm) + 0.7*orb + 0.3*drb + stl + 0.7*ast + 0.7*blk - 0.4*pf - tov
+        pm_impact = 0.4 * pm * (mins / 48.0)
+        raw_score = gs + pm_impact
+
+        milestones = [
+            (-15.0, 1.0), (-5.0, 3.0), (0.0, 5.0), (8.0, 6.5), 
+            (15.0, 7.5), (25.0, 8.5), (35.0, 9.0), (45.0, 9.6), (65.0, 10.0)
+        ]
+        
+        if raw_score <= milestones[0][0]: return 1.0
+        if raw_score >= milestones[-1][0]: return 10.0
+
+        for i in range(len(milestones) - 1):
+            x1, y1 = milestones[i]
+            x2, y2 = milestones[i+1]
+            if x1 <= raw_score <= x2:
+                val = y1 + (raw_score - x1) * (y2 - y1) / (x2 - x1)
+                return round(val, 2)
+        return 1.0
+
+    def _get_player_stats_string(self, s):
+        def parse_stat(key):
+            try:
+                val = s.get(key, '0')
+                return int(val) if val and val.isdigit() else 0
+            except: return 0
+
+        pts = parse_stat('points')
+        reb = parse_stat('rebounds')
+        ast = parse_stat('assists')
+        stl = parse_stat('steals')
+        blk = parse_stat('blocks')
+
+        fgs = s.get('fieldGoalsMade-fieldGoalsAttempted', '0-0').replace('-', '/')
+        tgs = s.get('threePointFieldGoalsMade-threePointFieldGoalsAttempted', '0-0').replace('-', '/')
+
+        parts = [f"{pts} PTS"]
+        if reb >= 3: parts.append(f"{reb} REB")
+        if ast >= 3: parts.append(f"{ast} AST")
+        if stl >= 3: parts.append(f"{stl} STL")
+        if blk >= 3: parts.append(f"{blk} BLK")
+        
+        parts.append(f"{fgs} FG")
+        parts.append(f"{tgs} 3PT")
+        
+        return " · ".join(parts)
+
+    def _get_rating_color(self, rating):
+        try:
+            r = float(rating)
+        except: r = 0.0
+        if r >= 9: return "#0068B9"
+        if r >= 8: return "#00929C"
+        if r >= 7: return "#41A67E"
+        if r > 6: return "#BF8B33"
+        return "#A63A2F"
+
+    def generate_html(self, summary):
+        header = summary.get('header', {})
+        comp = header.get('competitions', [{}])[0]
+        date_str = header.get('competitions', [{}])[0].get('date', '')
+        
+        utc_dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
         et_dt = utc_dt.astimezone(ZoneInfo("America/New_York"))
-
         date_display = et_dt.strftime("%B %d, %Y")
 
         home = next(t for t in comp['competitors'] if t['homeAway'] == 'home')
         away = next(t for t in comp['competitors'] if t['homeAway'] == 'away')
 
-        home_score = home['score']
-        away_score = away['score']
-
-        home_win = int(home_score) > int(away_score)
-        away_win = int(away_score) > int(home_score)
-
-        STAT_LEFT_COLOR = "#263D52"
-        STAT_RIGHT_COLOR = "#A63A2F"
-
-        h_ls, a_ls = home.get('linescores', []), away.get('linescores', [])
-        num_p = max(len(h_ls), len(a_ls), 4)
-        thead, h_row, a_row = [], [], []
-
-        for i in range(num_p):
-            label = (
-                f"{i + 1}ST" if i == 0 else f"{i + 1}ND" if i == 1 else f"{i + 1}RD" if i == 2 else "4TH") if i < 4 else (
-                f"OT{i - 3}" if num_p > 5 else "OT")
-            thead.append(f"<th>{label}</th>")
-            h_row.append(f"<td>{int(h_ls[i]['value']) if i < len(h_ls) else '-'}</td>")
-            a_row.append(f"<td>{int(a_ls[i]['value']) if i < len(a_ls) else '-'}</td>")
-
-        def get_full_stat(team, type_prefix):
-            stats = {s['name']: s['displayValue'] for s in team.get('statistics', [])}
-
-            mapping = {
-                'fg': ('fieldGoalPct', 'fieldGoalsMade', 'fieldGoalsAttempted'),
-                '3p': ('threePointPct', 'threePointFieldGoalsMade', 'threePointFieldGoalsAttempted'),
-                'ft': ('freeThrowPct', 'freeThrowsMade', 'freeThrowsAttempted')
+        def get_team_info(comp_obj):
+            team = comp_obj['team']
+            return {
+                'logo': team['logos'][0]['href'] if team.get('logos') else "",
+                'score': comp_obj.get('score', '0'),
+                'abbrev': team.get('abbreviation', '')
             }
 
-            pct_key, made_key, att_key = mapping[type_prefix]
+        home_info = get_team_info(home)
+        away_info = get_team_info(away)
+        
+        home_score_val = int(home_info['score']) if home_info['score'].isdigit() else 0
+        away_score_val = int(away_info['score']) if away_info['score'].isdigit() else 0
+        h_lose_class = "is-loser" if home_score_val < away_score_val else ""
+        a_lose_class = "is-loser" if away_score_val < home_score_val else ""
 
-            pct = stats.get(pct_key, "0")
-            made = stats.get(made_key, "0")
-            att = stats.get(att_key, "0")
 
-            m_a_string = stats.get(f"{made_key}-{att_key}", f"{made}/{att}")
-            if "/" not in m_a_string and "-" in m_a_string:
-                m_a_string = m_a_string.replace("-", "/")
+        # Boxscore Players
+        team_players = []
+        for team_box in summary.get('boxscore', {}).get('players', []):
+            labels = team_box['statistics'][0]['keys']
+            team_abbrev = team_box['team']['abbreviation']
+            players_list = []
+            
+            for athlete_stat in team_box['statistics'][0]['athletes']:
+                stats_data = athlete_stat.get('stats', [])
+                if not stats_data: continue
+                
+                stats_dict = dict(zip(labels, stats_data))
+                rating = self._calculate_performance_rating(stats_dict)
+                
+                try:
+                    pts = int(stats_dict.get('points', '0'))
+                except:
+                    pts = 0
+                
+                players_list.append({
+                    'name': athlete_stat['athlete']['displayName'],
+                    'shortName': athlete_stat['athlete']['shortName'],
+                    'headshot': athlete_stat['athlete'].get('headshot', {}).get('href', 'https://a.espncdn.com/i/headshots/nophoto.png'),
+                    'rating': rating,
+                    'pts': pts,
+                    'stats_str': self._get_player_stats_string(stats_dict),
+                    'color': self._get_rating_color(rating)
+                })
+            
+            # Sort by points and take top 5
+            players_list.sort(key=lambda x: x['pts'], reverse=True)
+            team_players.append({
+                'abbrev': team_abbrev,
+                'logo': team_box['team']['logo'],
+                'players': players_list[:5]
+            })
 
-            return f"{pct}%", f"({m_a_string})"
+        home_players = next(t for t in team_players if t['abbrev'] == home['team']['abbreviation'])
+        away_players = next(t for t in team_players if t['abbrev'] == away['team']['abbreviation'])
 
-        h_fg_p, h_fg_m = get_full_stat(home, 'fg')
-        a_fg_p, a_fg_m = get_full_stat(away, 'fg')
-        h_3p_p, h_3p_m = get_full_stat(home, '3p')
-        a_3p_p, a_3p_m = get_full_stat(away, '3p')
-        h_ft_p, h_ft_m = get_full_stat(home, 'ft')
-        a_ft_p, a_ft_m = get_full_stat(away, 'ft')
+        def render_player(p):
+            # Split stats string into segments for val/lbl styling
+            stat_segments = []
+            shoot_segments = []
+            
+            for s in p['stats_str'].split(' · '):
+                parts = s.split(' ')
+                if len(parts) == 2:
+                    stat_html = f'<div class="mini-stat"><span class="val">{parts[0]}</span><span class="lbl">{parts[1]}</span></div>'
+                    if parts[1] in ('FG', '3PT'):
+                        shoot_segments.append(stat_html)
+                    else:
+                        stat_segments.append(stat_html)
+            
+            stats_html = "".join(stat_segments)
+            shoot_html = "".join(shoot_segments)
 
-        # Лидеры
-        def get_leader_info(team):
-            try:
-                # 1. Ищем категорию 'rating' среди лидеров
-                rating_category = next((c for c in team['leaders'] if c['name'] == 'rating'), None)
+            return f"""
+            <div class="player-entry">
+                <div class="headshot-container">
+                    <img src="{p['headshot']}">
+                </div>
+                <div class="player-info">
+                    <div class="name-line">
+                        <span class="player-name">{p['shortName']}</span>
+                        <div class="score-badge" style="background: {p['color']}">{p['rating']}</div>
+                    </div>
+                    <div class="stats-row">{stats_html}</div>
+                    <div class="stats-row" style="margin-top: 5px;">{shoot_html}</div>
+                </div>
+            </div>
+            """
 
-                # Если рейтинга нет, берем первую категорию (например, points) как запасную
-                cat = rating_category if rating_category else team['leaders'][0]
-
-                leader = cat['leaders'][0]
-                athlete = leader['athlete']
-
-                # 2. Возвращаем только displayValue этого лидера (например, "32.5")
-                return {
-                    "name": athlete['displayName'],
-                    "headshot": athlete.get('headshot', ''),
-                    "stats": leader.get('displayValue', 'N/A'),
-                }
-            except Exception as e:
-                # Печатаем ошибку для отладки, если что-то пошло не так в структуре JSON
-                print(f"Error parsing leader: {e}")
-                return {"name": "N/A", "headshot": "", "stats": "N/A", "rating": "N/A"}
-
-        h_l, a_l = get_leader_info(home), get_leader_info(away)
-
-        h_lose_class = "is-loser" if not home_win else ""
-        a_lose_class = "is-loser" if not away_win else ""
+        home_html = "".join([render_player(p) for p in home_players['players']])
+        away_html = "".join([render_player(p) for p in away_players['players']])
 
         return f"""
         <!DOCTYPE html>
@@ -110,149 +219,83 @@ class Scores:
             <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;400;500;700;900&display=swap" rel="stylesheet">
             <style>
                 :root {{
-                    --stat-left: {STAT_LEFT_COLOR}; --stat-right: {STAT_RIGHT_COLOR};
                     --card-bg: #f0eee9; --text-main: #2b2624; --text-muted: #8e8a7e;
-                    --gold: #336659; --radius-xl: 40px; --radius-lg: 30px;
+                    --radius: 20px;
                 }}
+                * {{ box-sizing: border-box; }}
                 body {{ font-family: 'Unbounded', sans-serif; background: transparent; display: flex; justify-content: center; align-items: center; margin: 0; padding: 40px; }}
-                .match-card {{ background: var(--card-bg); width: 800px; box-shadow: 0 30px 80px rgba(0,0,0,0.1); padding: 50px; box-sizing: border-box; }}
-                .card-header {{ text-align: center; color: var(--text-muted); font-size: 11px; margin-bottom: 40px; text-transform: uppercase; letter-spacing: 0.3em; }}
-                .scoreboard {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 60px; }}
-                .team-name {{ font-weight: 500; font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }}
-                .team {{ display: flex; flex-direction: column; align-items: center; flex: 1; }}
-                .logo-wrapper {{ position: relative; background: #e6e2d6; width: 160px; height: 160px; border-radius: var(--radius-lg); display: flex; justify-content: center; align-items: center; margin-bottom: 24px; }}
-                .team-logo {{ width: 100px; height: 100px; object-fit: contain; }}
-                .winner-badge {{ position: absolute; top: -12px; right: -12px; background: var(--gold); color: white; width: 36px; height: 36px; border-radius: 14px; display: flex; justify-content: center; align-items: center; font-size: 10px; border: 4px solid #fff; }}
-    .score-wrapper {{
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    position: relative;
-                }}
-
-                .score {{
-                    font-size: 80px;
-                    font-weight: 700;
-                    color: var(--text-main);
-                    line-height: 1;
-                    transition: all 0.3s ease;
-                }}
-
-                .team.is-loser .score {{
-                    opacity: 0.5;
-                }}
+                .match-card {{ background: var(--card-bg); width: 1700px; padding: 60px; position: relative; }}
                 
-                .quarters-table {{ width: 100%; margin-bottom: 25px; border-collapse: collapse; table-layout: fixed;}}
-                .quarters-table th {{ font-size: 10px; color: var(--text-muted); padding-bottom: 20px; text-transform: uppercase; letter-spacing: 0.2em; }}
-                .quarters-table td {{ text-align: center; font-size: 16px; padding: 18px 2px; border-bottom: 1px;}}
-                .quarters-table .team-id {{ text-align: left; font-weight: 700; width: 70px; color: var(--text-muted); }}
-                .quarters-table .total-score {{ font-weight: 700;}}
+                .date-header {{ text-align: center; color: var(--text-muted); font-size: 18px; font-weight: 700; margin-bottom: 60px; text-transform: uppercase; letter-spacing: 0.3em; }}
+                
+                .scoreboard {{ display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center; margin-bottom: 100px; position: relative; }}
+                .team {{ display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; }}
+                .team-name {{ font-size: 22px; font-weight: 700; color: var(--text-muted); margin-bottom: 25px; text-transform: uppercase; letter-spacing: 1px; }}
+                .logo-wrapper {{ position: relative; width: 300px; height: 300px; border-radius: 60px; display: flex; justify-content: center; align-items: center; margin-bottom: 40px; }}
+                .team-logo-main {{ width: 210px; height: 210px; object-fit: contain; }}
+                
+                .score-wrapper {{ display: flex; align-items: center; justify-content: center; width: 100%; }}
+                .score {{ font-size: 160px; font-weight: 800; color: var(--text-main); line-height: 0.9; transition: all 0.3s ease; letter-spacing: -8px; }}
+                .team.is-loser .score {{ opacity: 0.3; }}
+                
+                .vs-divider {{ position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); font-size: 80px; font-weight: 900; color: #e6e2d6; margin: 0; letter-spacing: -2px; }}
+                
+                .columns-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 80px; }}
+                .players-list {{ width: max-content; margin: 0 auto; }}
 
-                .stats-container {{ padding: 30px 40px;}}
-                .stat-row {{ margin-bottom: 24px; }}
-                .stat-info {{ display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 12px; align-items: baseline; }}
-                .stat-val {{ width: 140px; }}
-                .stat-val.left {{ text-align: left; color: var(--stat-left); }}
-                .stat-val.right {{ text-align: right; color: var(--stat-right); }}
-                .stat-name {{ color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.2em; flex-grow: 1; text-align: center; }}
-                .stat-m-a {{ font-weight: 400; font-size: 10px; opacity: 0.8; margin-left: 4px; }}
-
-                .dual-bar {{ height: 4px; display: flex; justify-content: center; gap: 6px; }}
-                .bar-half {{ width: 50%; height: 100%; background: #e6e2d6; border-radius: 10px; position: relative; overflow: hidden; }}
-                .fill {{ height: 100%; position: absolute; top: 0; }}
-                .fill-l {{ right: 0; background: var(--stat-left); border-radius: 0 10px 10px 0; }}
-                .fill-r {{ left: 0; background: var(--stat-right); border-radius: 10px 0 0 10px; }}
-
-                .leaders-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
-                .leader-card {{ display: flex; align-items: center; padding: 24px; background: #e6e2d6; border-radius: var(--radius-lg); position: relative; }}
-                .leader-img {{ width: 90px; height: 90px; border-radius: 15px; margin-right: 20px; object-fit: cover; object-position: top; flex-shrink: 0; }}
-                .leader-info {{ flex-grow: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }}
-                .leader-name {{ font-weight: 700; font-size: 16px; margin-bottom: 6px; line-height: 1.2; color: var(--text-main); }}
-                .leader-stat {{ font-size: 12px; color: var(--text-muted); font-weight: 500; }}
-                .leader-team-logo {{ width: 32px; height: 32px; object-fit: contain; margin-left: 12px; }}
+                .player-entry {{ display: flex; align-items: center; gap: 25px; margin-bottom: 40px; }}
+                .headshot-container {{ width: 140px; height: 140px; border-radius: 50%; background: #e6e2d6; overflow: hidden; flex-shrink: 0; }}
+                .headshot-container img {{ width: 100%; height: 100%; object-fit: cover; object-position: top; }}
+                
+                .player-info {{ flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }}
+                .name-line {{ display: flex; align-items: center; gap: 15px; font-size: 32px; font-weight: 700; color: var(--text-main); }}
+                .player-name {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+                .score-badge {{ background: var(--score-bg); color: #fff; padding: 8px 12px; border-radius: 10px; font-size: 28px; font-weight: 500; line-height: 1; display: flex; align-items: center; justify-content: center; }}
+                
+                .stats-row {{ display: flex; gap: 15px; align-items: baseline; margin-top: 5px; flex-wrap: wrap; }}
+                .mini-stat {{ display: flex; align-items: baseline; gap: 5px; }}
+                .mini-stat .val {{ font-size: 36px; font-weight: 900; color: var(--text-main); line-height: 1; letter-spacing: 0px; }}
+                .mini-stat .lbl {{ font-size: 16px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }}
             </style>
         </head>
         <body>
             <div class="match-card">
-                <div class="card-header">{date_display}</div>
-<div class="scoreboard">
+                <div class="date-header">{date_display}</div>
+                
+                <div class="scoreboard">
                     <div class="team {h_lose_class}">
-                        <div class="team-name">{home['team']['abbreviation']}</div>
+                        <div class="team-name">{home_info['abbrev']}</div>
                         <div class="logo-wrapper">
-                            <img src="{home['team']['logo']}" class="team-logo">
+                            <img src="{home_info['logo']}" class="team-logo-main">
                         </div>
                         <div class="score-wrapper">
-                            <div class="score">{home['score']}</div>
+                            <div class="score">{home_info['score']}</div>
                         </div>
                     </div>
                     
-                    <div style="font-weight: 900; color: #e6e2d6; font-size: 50px;">VS</div>
+                    <div class="vs-divider">VS</div>
 
                     <div class="team {a_lose_class}">
-                        <div class="team-name">{away['team']['abbreviation']}</div>
+                        <div class="team-name">{away_info['abbrev']}</div>
                         <div class="logo-wrapper">
-                            <img src="{away['team']['logo']}" class="team-logo">
+                            <img src="{away_info['logo']}" class="team-logo-main">
                         </div>
                         <div class="score-wrapper">
-                            <div class="score">{away['score']}</div>
+                            <div class="score">{away_info['score']}</div>
                         </div>
                     </div>
                 </div>
 
-                <table class="quarters-table">
-                    <thead><tr><th class="team-id"></th>{"".join(thead)}<th class="total-score"></th></tr></thead>
-                    <tbody>
-                        <tr><td class="team-id">{home['team']['abbreviation']}</td>{"".join(h_row)}<td class="total-score">{home['score']}</td></tr>
-                        <tr><td class="team-id">{away['team']['abbreviation']}</td>{"".join(a_row)}<td class="total-score">{away['score']}</td></tr>
-                    </tbody>
-                </table>
-
-                <div class="stats-container">
-                    <div class="stat-row">
-                        <div class="stat-info">
-                            <div class="stat-val left">{h_fg_p}<span class="stat-m-a">{h_fg_m}</span></div>
-                            <div class="stat-name">Field Goals</div>
-                            <div class="stat-val right">{a_fg_p}<span class="stat-m-a">{a_fg_m}</span></div>
-                        </div>
-                        <div class="dual-bar">
-                            <div class="bar-half"><div class="fill fill-l" style="width:{h_fg_p}"></div></div>
-                            <div class="bar-half"><div class="fill fill-r" style="width:{a_fg_p}"></div></div>
+                <div class="columns-container">
+                    <div class="column">
+                        <div class="players-list">
+                            {home_html}
                         </div>
                     </div>
-                    <div class="stat-row">
-                        <div class="stat-info">
-                            <div class="stat-val left">{h_3p_p}<span class="stat-m-a">{h_3p_m}</span></div>
-                            <div class="stat-name">3-Pointers</div>
-                            <div class="stat-val right">{a_3p_p}<span class="stat-m-a">{a_3p_m}</span></div>
+                    <div class="column">
+                        <div class="players-list">
+                            {away_html}
                         </div>
-                        <div class="dual-bar">
-                            <div class="bar-half"><div class="fill fill-l" style="width:{h_3p_p}"></div></div>
-                            <div class="bar-half"><div class="fill fill-r" style="width:{a_3p_p}"></div></div>
-                        </div>
-                    </div>
-                    <div class="stat-row">
-                        <div class="stat-info">
-                            <div class="stat-val left">{h_ft_p}<span class="stat-m-a">{h_ft_m}</span></div>
-                            <div class="stat-name">Free Throws</div>
-                            <div class="stat-val right">{a_ft_p}<span class="stat-m-a">{a_ft_m}</span></div>
-                        </div>
-                        <div class="dual-bar">
-                            <div class="bar-half"><div class="fill fill-l" style="width:{h_ft_p}"></div></div>
-                            <div class="bar-half"><div class="fill fill-r" style="width:{a_ft_p}"></div></div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="leaders-grid">
-                    <div class="leader-card">
-                        <img src="{h_l['headshot']}" class="leader-img">
-                        <div class="leader-info"><span class="leader-name">{h_l['name']}</span><span class="leader-stat">{h_l['stats']}</span></div>
-                        <img src="{home['team']['logo']}" class="leader-team-logo">
-                    </div>
-                    <div class="leader-card">
-                        <img src="{a_l['headshot']}" class="leader-img">
-                        <div class="leader-info"><span class="leader-name">{a_l['name']}</span><span class="leader-stat">{a_l['stats']}</span></div>
-                        <img src="{away['team']['logo']}" class="leader-team-logo">
                     </div>
                 </div>
             </div>
@@ -260,61 +303,60 @@ class Scores:
         </html>
         """
 
-    def get_daily_leader(self, response):
+    def get_daily_leader(self, summary_list):
         all_leaders = []
-
-        for event in response.get('events', []):
-            for comp in event.get('competitions', []):
-                for team in comp.get('competitors', []):
-                    # Из каждого матча вытягиваем лидеров
-                    # Обычно ESPN присылает категории: points, rebounds, assists, rating
-                    for cat in team.get('leaders', []):
-                        if cat['name'] == 'rating':  # Собираем по очкам для топа
-                            leader_data = cat['leaders'][0]
-                            all_leaders.append({
-                                "player": leader_data['athlete']['displayName'],
-                                "team": team['team']['abbreviation'],
-                                "value": float(leader_data['value']),
-                                "displayValue": leader_data['displayValue'],
-                            })
-
-        # Сортируем по убыванию очков и берем топ-5
+        for summary in summary_list:
+            for team_box in summary.get('boxscore', {}).get('players', []):
+                labels = team_box['statistics'][0]['keys']
+                team_abbrev = team_box['team']['abbreviation']
+                for athlete_stat in team_box['statistics'][0]['athletes']:
+                    stats_data = athlete_stat.get('stats', [])
+                    if not stats_data: continue
+                    stats_dict = dict(zip(labels, stats_data))
+                    rating = self._calculate_performance_rating(stats_dict)
+                    all_leaders.append({
+                        "player": athlete_stat['athlete']['displayName'],
+                        "team": team_abbrev,
+                        "value": rating,
+                        "displayValue": f"{rating}"
+                    })
+        if not all_leaders: return None
         return sorted(all_leaders, key=lambda x: x['value'], reverse=True)[0]
 
-
     def generate(self, date: str):
-        response = requests.get(API_URL.format(date)).json()
-        events = response.get('events', [])
+        scoreboard = requests.get(f"{API_BASE}/scoreboard?dates={date}").json()
+        events = scoreboard.get('events', [])
+        
+        summary_list = []
 
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={'width': 2000, 'height': 2400})
-
-            headlines = []
+            page = browser.new_page(viewport={'width': 1600, 'height': 2000})
 
             for i, event in enumerate(events):
-                home_team = event['competitions'][0]['competitors'][0]['team']['abbreviation']
-                away_team = event['competitions'][0]['competitors'][1]['team']['abbreviation']
-
-                print(f"\nMATCH {i + 1}: {away_team} @ {home_team}")
-                # headline = event['competitions'][0].get('headlines', [])
-                #
-                # if headline:
-                #     headlines.append(headline[0]["description"])
-
-                html_content = self.generate_html(event)
+                game_id = event['id']
+                print(f"Fetching summary for game {game_id}...")
+                summary = requests.get(f"{API_BASE}/summary?event={game_id}").json()
+                
+                if not summary.get('boxscore', {}).get('teams'): continue
+                
+                summary_list.append(summary)
+                
+                html_content = self.generate_html(summary)
                 page.set_content(html_content)
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(1000)
 
                 card = page.query_selector(".match-card")
-                card.screenshot(path=f"{OUTPUT_DIR}/match_{i + 1}.png", scale="device")
-                print(f"Card {i + 1} loaded.")
+                if card:
+                    card.screenshot(path=f"{OUTPUT_DIR}/match_{i + 1}.png", scale="device")
+                    print(f"Match {i + 1} image saved.")
 
             browser.close()
 
-        day_leader = self.get_daily_leader(response)
-
-        return f"{day_leader['player']} ({day_leader['team']}) – {day_leader['displayValue']}"
+        day_leader = self.get_daily_leader(summary_list)
+        if day_leader:
+            return f"{day_leader['player']} ({day_leader['team']}) – {day_leader['displayValue']}"
+        return "No games processed."
 
 # if __name__ == "__main__":
 #     main()

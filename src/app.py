@@ -3,7 +3,8 @@ import os
 import time
 from datetime import datetime
 from moviepy import VideoFileClip
-from telebot import apihelper
+from telebot import apihelper, types
+from telebot.apihelper import ApiTelegramException
 
 apihelper.CONNECT_TIMEOUT = 120
 apihelper.READ_TIMEOUT = 120
@@ -11,9 +12,11 @@ apihelper.READ_TIMEOUT = 120
 from scores import Scores
 from standings import Standings
 from performance_2 import Performance
-from performance import PerformanceElite
+from performance import Performance as PerformanceElite
 from media import MediaLoader
 from schedule import Schedule
+from all_performances import PerformanceSummary
+from weekly_performances import WeeklyPerformances
 
 DT_FORMAT = "%Y%m%d"
 TOKEN = os.environ.get("TOKEN", "")
@@ -27,9 +30,10 @@ performance = Performance()
 performance_elite = PerformanceElite()
 media_loader = MediaLoader()
 schedule = Schedule()
+performance_all = PerformanceSummary()
+potw = WeeklyPerformances()
 
 import os
-from telebot import types
 
 
 def send_videos_from_dir(chat_id, folder_path='downloads'):
@@ -48,19 +52,30 @@ def send_videos_from_dir(chat_id, folder_path='downloads'):
 
             with open(file_path, 'rb') as video:
                 print(f"Отправка вертикального видео ({w}x{h}): {filename}...")
-
-                bot.send_video(
-                    chat_id,
-                    video,
-                    caption=f"🎥 {filename}",
-                    width=w,  # Передаем ширину
-                    height=h,  # Передаем высоту
-                    duration=duration,  # И длительность для корректного плеера
-                    timeout=300,
-                    supports_streaming=True  # Позволяет смотреть видео до полной загрузки
-                )
-
-            print(f"Успешно отправлено!")
+                
+                sent = False
+                while not sent:
+                    try:
+                        bot.send_video(
+                            chat_id,
+                            video,
+                            caption=f"🎥 {filename}",
+                            width=w,
+                            height=h,
+                            duration=duration,
+                            timeout=300,
+                            supports_streaming=True
+                        )
+                        sent = True
+                        print(f"Успешно отправлено!")
+                    except ApiTelegramException as e:
+                        if e.error_code == 429:
+                            retry_after = e.result_json.get('parameters', {}).get('retry_after', 10)
+                            print(f"⚠️ Limit 429. Retry after {retry_after}s...")
+                            time.sleep(retry_after + 1)
+                            video.seek(0)
+                        else:
+                            raise e
             time.sleep(2)
 
         except Exception as e:
@@ -75,8 +90,11 @@ def send_videos_from_dir(chat_id, folder_path='downloads'):
             print(f"Не удалось удалить {file_path}: {e}")
 
 
-def send_and_clear_photos(chat_id, folder_path):
+def send_and_clear_photos(chat_id, folder_path, custom_caption=None):
     # 1. Собираем все пути к файлам
+    if not os.path.exists(folder_path):
+        return
+
     files = [os.path.join(folder_path, f) for f in os.listdir(folder_path)
              if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
 
@@ -86,25 +104,36 @@ def send_and_clear_photos(chat_id, folder_path):
     # 2. Сортируем файлы (чтобы они шли в логичном порядке, например по имени)
     files.sort()
 
-    # 3. Разбиваем список файлов на чанки по 10 штук
-    # Используем list comprehension для создания списка списков
-    chunks = [files[i:i + 4] for i in range(0, len(files), 4)]
+    # 3. Разбиваем список файлов на чанки по 10 штук (лимит Телеграма)
+    chunks = [files[i:i + 10] for i in range(0, len(files), 10)]
 
     for chunk in chunks:
         media = []
         for i, file_path in enumerate(chunk):
             # Подпись добавляем только к первой картинке в каждом посте
-            caption = "🏀 NBA Update" if i == 0 else None
+            caption = (custom_caption if custom_caption else "🏀 NBA Update") if i == 0 else None
 
             with open(file_path, 'rb') as f:
                 # Читаем байты, чтобы файл можно было удалить сразу после отправки
                 media.append(types.InputMediaPhoto(f.read(), caption=caption))
 
-        # 4. Отправляем текущую группу (альбом)
-        try:
-            bot.send_media_group(chat_id, media)
-        except Exception as e:
-            print(f"Ошибка при отправке группы: {e}")
+        # 4. Отправляем текущую группу (альбом) с ретраями при 429
+        sent = False
+        while not sent:
+            try:
+                bot.send_media_group(chat_id, media)
+                sent = True
+            except ApiTelegramException as e:
+                if e.error_code == 429:
+                    retry_after = e.result_json.get('parameters', {}).get('retry_after', 10)
+                    print(f"⚠️ Limit 429. Retry after {retry_after}s...")
+                    time.sleep(retry_after + 1)
+                else:
+                    print(f"Ошибка при отправке группы: {e}")
+                    break
+            except Exception as e:
+                print(f"Неизвестная ошибка: {e}")
+                break
 
     # 5. Удаляем ВСЕ обработанные файлы из папки
     for file_path in files:
@@ -112,6 +141,89 @@ def send_and_clear_photos(chat_id, folder_path):
             os.remove(file_path)
         except Exception as e:
             print(f"Не удалось удалить {file_path}: {e}")
+
+
+# Глобальный словарь для группировки медиа (фото)
+media_groups = {}
+
+def handle_premium_merge(chat_id, card_file_id, photo_file_id):
+    """Общий обработчик для создания премиум-карточки"""
+    bot.send_message(chat_id, "⏳ Создаю премиум-карточку...")
+    
+    try:
+        paths = []
+        for file_id in [card_file_id, photo_file_id]:
+            file_info = bot.get_file(file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            path = f"temp_{file_id}.png"
+            with open(path, 'wb') as f:
+                f.write(downloaded_file)
+            paths.append(path)
+
+        # Сопоставляем пути: 1-ая - статка, 2-ая - фото игрока
+        card_path = paths[0]
+        photo_path = paths[1]
+
+        # Генерируем мердж
+        result_path = performance_all.generate_premium_merge(card_path, photo_path)
+        
+        with open(result_path, 'rb') as f:
+            bot.send_photo(chat_id, f, caption="✨ Твоя премиум-карточка готова!")
+            
+        # Чистим временные файлы
+        for p in paths + [result_path]:
+            if os.path.exists(p): os.remove(p)
+            
+    except Exception as e:
+        bot.send_message(chat_id, f"🚫 Ошибка при создании преимум-карточки: {e}")
+
+def process_media_group(chat_id, group_id):
+    """Отрабатывает, когда все фото в группе получены"""
+    data = media_groups.get(group_id)
+    if not data or len(data['files']) != 2:
+        return
+
+    group = data['files']
+    # 1-ая - статка, 2-ая - фото игрока
+    handle_premium_merge(chat_id, group[0], group[1])
+    
+    if group_id in media_groups:
+        del media_groups[group_id]
+
+@bot.message_handler(content_types=['photo'])
+@bot.channel_post_handler(content_types=['photo'])
+def handle_photos(message):
+    if message.chat.id != CHANNEL_ID:
+        return
+
+    # Проверка на ответ (reply) к другой фотографии с командой /merge
+    if message.reply_to_message and message.reply_to_message.photo and message.caption and "/merge" in message.caption:
+        card_file_id = message.reply_to_message.photo[-1].file_id
+        photo_file_id = message.photo[-1].file_id
+        handle_premium_merge(message.chat.id, card_file_id, photo_file_id)
+        return
+
+    if message.media_group_id:
+        gid = message.media_group_id
+        if gid not in media_groups:
+            media_groups[gid] = {'files': [], 'should_merge': False}
+        
+        # Только первое фото в альбоме содержит подпись
+        if message.caption and "/merge" in message.caption:
+            media_groups[gid]['should_merge'] = True
+        
+        media_groups[gid]['files'].append(message.photo[-1].file_id)
+        
+        # Если пришло 2 фото, проверяем, нужно ли объединять
+        if len(media_groups[gid]['files']) == 2:
+            time.sleep(1) # Небольшая пауза для стабильности
+            if media_groups[gid]['should_merge']:
+                process_media_group(message.chat.id, gid)
+            else:
+                # Если команды нет, просто очищаем данные через время (или сразу)
+                del media_groups[gid]
+    elif message.caption and "/merge" in message.caption:
+        bot.reply_to(message, "Чтобы сделать премиум-карточку через альбом, пришли **сразу две** фотографии одним сообщением. Или ответь на фото статистики фотографией игрока с командой /merge.")
 
 
 @bot.channel_post_handler(content_types=['text'])
@@ -136,6 +248,19 @@ def handle_channel_posts(message):
         process_standings(message.chat.id)
     if "/elite" in text:
         process_perf_elite(message.chat.id, text)
+    if "/top" in text:
+        process_top(message.chat.id, text)
+    if "/potw" in text:
+        process_potw(message.chat.id, text)
+
+def process_potw(chat_id, text: str):
+    date = text.split(" ")[1]
+
+    bot.send_message(chat_id, "⏳ Generating potw...")
+    potw.fetch_and_aggregate(date)
+
+    send_and_clear_photos(chat_id, "images/weekly/players")
+    bot.send_message(chat_id, "✅ Done")
 
 def process_insta(chat_id, text: str):
     date = text.split(" ")[1]
@@ -218,7 +343,7 @@ def process_perf_elite(chat_id, text: str):
 
 def process_perf(chat_id, text: str):
     data = text.split(" ")[1].split("|")
-
+    print(data)
     bot.send_message(chat_id, "⏳ Generating performance...")
     performance.generate(
         name=data[0].replace("+", " "),
@@ -232,6 +357,57 @@ def process_perf(chat_id, text: str):
 
     send_and_clear_photos(chat_id, "images/performances")
     bot.send_message(chat_id, "✅ Done")
+
+
+def process_top(chat_id, text: str):
+    try:
+        date = text.split(" ")[1]
+    except IndexError:
+        bot.send_message(chat_id, "🚫 Please provide a date: /top 20260327")
+        return
+
+    bot.send_message(chat_id, f"⏳ Generating top performances for {date}...")
+    
+    try:
+        mvp = performance_all.fetch_and_generate(date)
+
+        # Send MVP of the Day message (at the start as a teaser)
+        if mvp:
+            mvp_text = (
+                f"🌟 *PLAYER OF THE DAY*\n\n"
+                f"🏀 *{mvp['name']}* ({mvp['team']})\n"
+                f"🔥 *{mvp['rating']}* score | *{mvp['fps']}* fps\n\n"
+                f"📊 {mvp['pts']} PTS, {mvp['ast']} AST, {mvp['reb']} REB, {mvp['stl']} STL"
+            )
+            bot.send_message(chat_id, mvp_text, parse_mode='Markdown')
+        
+        base_dir = "images/performances"
+        if not os.path.exists(base_dir):
+            bot.send_message(chat_id, "✅ No performances generated for this date.")
+            return
+
+        # Получаем список всех папок игр
+        game_folders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
+        game_folders.sort()
+
+        if not game_folders:
+            bot.send_message(chat_id, "✅ No player cards met the threshold.")
+        else:
+            for folder in game_folders:
+                folder_path = os.path.join(base_dir, folder)
+                # Отправляем карточки из этой папки с именем папки в качестве подписи
+                send_and_clear_photos(chat_id, folder_path, custom_caption=f"🏀 {folder.replace('_', ' ')}")
+                
+                # Удаляем пустую папку
+                try:
+                    os.rmdir(folder_path)
+                except Exception as e:
+                    print(f"Could not remove folder {folder_path}: {e}")
+
+        bot.send_message(chat_id, "✅ Batch processing complete!")
+
+    except Exception as e:
+        bot.send_message(chat_id, f"🚫 Error during processing: {e}")
 
 
 if __name__ == "__main__":
