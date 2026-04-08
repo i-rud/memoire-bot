@@ -10,6 +10,7 @@ apihelper.CONNECT_TIMEOUT = 120
 apihelper.READ_TIMEOUT = 120
 
 from scores import Scores
+from old_scores import Scores as OldScores
 from standings import Standings
 from performance_2 import Performance
 from performance import Performance as PerformanceElite
@@ -25,6 +26,7 @@ CHANNEL_ID = int(os.environ.get("CHANNEL_ID", 0))
 bot = telebot.TeleBot(TOKEN)
 
 scores = Scores()
+old_scores = OldScores()
 standings = Standings()
 performance = Performance()
 performance_elite = PerformanceElite()
@@ -236,6 +238,8 @@ def handle_channel_posts(message):
 
     if "/gen" in text:
         process_gen(message.chat.id, text)
+    if "/old" in text:
+        process_old(message.chat.id, text)
     if "/perf" in text:
         process_perf(message.chat.id, text)
     if "/video" in text:
@@ -324,6 +328,22 @@ def process_gen(chat_id, text: str):
 
     bot.send_message(chat_id, "✅ Done")
 
+def process_old(chat_id, text: str):
+    date = text.split(" ")[1]
+
+    try:
+        print(datetime.strptime(date, DT_FORMAT))
+    except Exception:
+        bot.send_message(chat_id, f"🚫Invalid date format ({date}), valid format is {DT_FORMAT}")
+        return
+
+    bot.send_message(chat_id, "⏳ Generating old scores...")
+    old_scores.generate(date)
+
+    send_and_clear_photos(chat_id, "images/old_scores")
+
+    bot.send_message(chat_id, "✅ Done")
+
 def process_perf_elite(chat_id, text: str):
     data = text.split(" ")[1].split("|")
 
@@ -368,46 +388,42 @@ def process_top(chat_id, text: str):
 
     bot.send_message(chat_id, f"⏳ Generating top performances for {date}...")
     
-    try:
-        mvp = performance_all.fetch_and_generate(date)
+    mvp = performance_all.fetch_and_generate(date)
 
-        # Send MVP of the Day message (at the start as a teaser)
-        if mvp:
-            mvp_text = (
-                f"🌟 *PLAYER OF THE DAY*\n\n"
-                f"🏀 *{mvp['name']}* ({mvp['team']})\n"
-                f"🔥 *{mvp['rating']}* score | *{mvp['fps']}* fps\n\n"
-                f"📊 {mvp['pts']} PTS, {mvp['ast']} AST, {mvp['reb']} REB, {mvp['stl']} STL"
-            )
-            bot.send_message(chat_id, mvp_text, parse_mode='Markdown')
-        
-        base_dir = "images/performances"
-        if not os.path.exists(base_dir):
-            bot.send_message(chat_id, "✅ No performances generated for this date.")
-            return
+    # Send MVP of the Day message (at the start as a teaser)
+    if mvp:
+        mvp_text = (
+            f"🌟 *PLAYER OF THE DAY*\n\n"
+            f"🏀 *{mvp['name']}*\n"
+            f"🔥 *{mvp['rating']}* score | *{mvp['fps']}* fps\n\n"
+            f"📊 {mvp['pts']} PTS, {mvp['ast']} AST, {mvp['reb']} REB, {mvp['stl']} STL"
+        )
+        bot.send_message(chat_id, mvp_text, parse_mode='Markdown')
+    
+    base_dir = "images/performances"
+    if not os.path.exists(base_dir):
+        bot.send_message(chat_id, "✅ No performances generated for this date.")
+        return
 
-        # Получаем список всех папок игр
-        game_folders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
-        game_folders.sort()
+    # Получаем список всех папок игр
+    game_folders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
+    game_folders.sort()
 
-        if not game_folders:
-            bot.send_message(chat_id, "✅ No player cards met the threshold.")
-        else:
-            for folder in game_folders:
-                folder_path = os.path.join(base_dir, folder)
-                # Отправляем карточки из этой папки с именем папки в качестве подписи
-                send_and_clear_photos(chat_id, folder_path, custom_caption=f"🏀 {folder.replace('_', ' ')}")
-                
-                # Удаляем пустую папку
-                try:
-                    os.rmdir(folder_path)
-                except Exception as e:
-                    print(f"Could not remove folder {folder_path}: {e}")
+    if not game_folders:
+        bot.send_message(chat_id, "✅ No player cards met the threshold.")
+    else:
+        for folder in game_folders:
+            folder_path = os.path.join(base_dir, folder)
+            # Отправляем карточки из этой папки с именем папки в качестве подписи
+            send_and_clear_photos(chat_id, folder_path, custom_caption=f"🏀 {folder.replace('_', ' ')}")
+            
+            # Удаляем пустую папку
+            try:
+                os.rmdir(folder_path)
+            except Exception as e:
+                print(f"Could not remove folder {folder_path}: {e}")
 
-        bot.send_message(chat_id, "✅ Batch processing complete!")
-
-    except Exception as e:
-        bot.send_message(chat_id, f"🚫 Error during processing: {e}")
+    bot.send_message(chat_id, "✅ Batch processing complete!")
 
 
 if __name__ == "__main__":

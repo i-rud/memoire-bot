@@ -4,6 +4,9 @@ from playwright.sync_api import sync_playwright
 
 API_URL = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
 
+TOTAL_GAMES = 82
+PLAYOFF_CUTOFF = 6
+
 
 class Standings:
     def __init__(self):
@@ -25,6 +28,8 @@ class Standings:
                 seed_raw = next((s['value'] for s in entry['stats'] if s['name'] == 'playoffSeed'), 99)
                 pct_raw = next((float(s['value']) for s in entry['stats'] if s['name'] == 'winPercent'), 0.0)
                 last_10 = stats.get('lastTenGamesRecord', stats.get('Last Ten Games', '0-0'))
+                wins_raw = int(next((s['value'] for s in entry['stats'] if s['name'] == 'wins'), 0))
+                losses_raw = int(next((s['value'] for s in entry['stats'] if s['name'] == 'losses'), 0))
 
                 conf_data["teams"].append({
                     "logo": team['logos'][0]['href'],
@@ -34,18 +39,52 @@ class Standings:
                     "seed": int(seed_raw),
                     "pct_raw": pct_raw,
                     "streak": stats.get('streak', '-'),
-                    "l10": last_10
+                    "l10": last_10,
+                    "wins_raw": wins_raw,
+                    "losses_raw": losses_raw,
                 })
 
             conf_data["teams"].sort(key=lambda x: (x['seed'], -x['pct_raw']))
             conferences.append(conf_data)
         return conferences
 
+    def calculate_clinch_status(self, teams: list) -> list:
+        """
+        Помечает команды, гарантированно попавшие в прямой плей-офф (топ-6).
+        Поле 'clinched': True / False
+        """
+
+        def games_remaining(team):
+            return TOTAL_GAMES - team['wins_raw'] - team['losses_raw']
+
+        sorted_teams = sorted(teams, key=lambda t: (t['seed'], -t['pct_raw']))
+        n = len(sorted_teams)
+
+        team_at_7 = sorted_teams[PLAYOFF_CUTOFF] if n > PLAYOFF_CUTOFF else None
+
+        for team in sorted_teams:
+            clinched = False
+            if team_at_7:
+                gr_7 = games_remaining(team_at_7)
+                # Даже если 7-я выиграет все оставшиеся — не догонит нас
+                if team['wins_raw'] >= team_at_7['wins_raw'] + gr_7:
+                    clinched = True
+            team['clinched'] = clinched
+
+        return sorted_teams
+
     def generate_conf_html(self, conf):
+        teams = self.calculate_clinch_status(conf['teams'])
+
         rows = ""
-        for idx, t in enumerate(conf['teams'], 1):
+        for idx, t in enumerate(teams, 1):
             display_rank = t['seed'] if t['seed'] < 99 else idx
             zone_class = "playoff-zone" if display_rank <= 6 else "playin-zone" if display_rank <= 10 else ""
+
+            # Жирный X для команд, гарантированно попавших в плей-офф
+            clinch_html = ""
+            if t.get('clinched'):
+                clinch_html = '<span class="clinch-x">X</span>'
 
             # Логика группировки названий зон
             zone_label_html = ""
@@ -53,13 +92,13 @@ class Standings:
                 zone_label_html = '<td rowspan="6" class="vertical-zone-td"><div class="zone-text">PLAYOFFS</div></td>'
             elif display_rank == 7:
                 zone_label_html = '<td rowspan="4" class="vertical-zone-td"><div class="zone-text">PLAY-IN</div></td>'
-            elif display_rank >= 11 and display_rank == 11:
-                # Для нижней части таблицы создаем пустую ячейку на остаток строк, чтобы не ломать верстку
-                zone_label_html = f'<td rowspan="{len(conf["teams"]) - 10}" class="vertical-zone-td"></td>'
+            elif display_rank == 11:
+                zone_label_html = f'<td rowspan="{len(teams) - 10}" class="vertical-zone-td"></td>'
 
             rows += f"""
             <tr class="team-row">
                 {zone_label_html}
+                <td class="clinch-cell">{clinch_html}</td>
                 <td class="rank-cell">
                     <span class="rank-badge {zone_class}">{display_rank}</span>
                 </td>
@@ -75,7 +114,7 @@ class Standings:
             """
 
             if display_rank == 6 or display_rank == 10:
-                rows += '<tr class="line-divider"><td colspan="7"><div></div></td></tr>'
+                rows += '<tr class="line-divider"><td colspan="8"><div></div></td></tr>'
 
         conf_color = {
             "Eastern Conference": "#A63A2F",
@@ -100,7 +139,7 @@ class Standings:
 
                 .main-card {{ 
                     background: var(--card-bg); 
-                    width: 900px; 
+                    width: 950px; 
                     padding: 50px 40px; 
                 }}
 
@@ -114,9 +153,8 @@ class Standings:
 
                 .standings-table {{ width: 100%; border-collapse: collapse; }}
 
-                /* Узкая колонка для текста зон */
                 .vertical-zone-td {{
-                    width: 20px; /* Сузили колонку */
+                    width: 20px;
                     vertical-align: middle;
                     padding: 0 !important;
                     text-align: center;
@@ -135,12 +173,22 @@ class Standings:
 
                 .standings-table th {{ font-size: 10px; color: var(--text-muted); padding: 15px 5px; text-transform: uppercase; letter-spacing: 1px; }}
                 .standings-table td {{ padding: 10px 5px; text-align: center; font-size: 15px; }}
-
-                /* Чтобы заголовок POS не смещался из-за отсутствия заголовка у ZONE */
-                .standings-table th:first-child {{ width: 40px; }} 
+                .standings-table th:first-child {{ width: 40px; }}
 
                 .line-divider td {{ padding: 0 !important; }}
                 .line-divider div {{ border-bottom: 2px dashed var(--divider); opacity: 0.4; margin: 8px 0; }}
+
+                .rank-cell {{
+                    white-space: nowrap;
+                    vertical-align: middle;
+                }}
+
+                .clinch-cell {{
+                    width: 24px;
+                    text-align: center;
+                    vertical-align: middle;
+                    padding: 0 4px !important;
+                }}
 
                 .team-cell {{ display: flex; align-items: center; text-align: left; }}
                 .team-logo {{ width: 36px; height: 36px; margin-right: 15px; object-fit: contain; }}
@@ -150,6 +198,38 @@ class Standings:
                     display: inline-flex; justify-content: center; align-items: center;
                     width: 32px; height: 32px; border-radius: 10px; font-size: 12px;
                     font-weight: 700; color: var(--text-muted); background: #e6e2d6;
+                    vertical-align: middle;
+                }}
+
+                .clinch-x {{
+                    display: inline-block;
+                    font-size: 11px;
+                    font-weight: 900;
+                    color: #166534;
+                    margin-left: 5px;
+                    vertical-align: middle;
+                    text-align: center;
+                    letter-spacing: 0;
+                }}
+
+
+                /* Легенда */
+                .legend {{
+                    display: flex;
+                    gap: 20px;
+                    justify-content: center;
+                    margin-top: 28px;
+                    padding-top: 20px;
+                }}
+                .legend-item {{
+                    display: flex;
+                    align-items: center;
+                    gap: 7px;
+                    font-size: 10px;
+                    font-weight: 600;
+                    letter-spacing: 1px;
+                    text-transform: uppercase;
+                    color: var(--text-muted);
                 }}
 
                 .playoff-zone {{ background: rgba(34, 197, 94, 0.15); color: #166534; }}
@@ -168,7 +248,9 @@ class Standings:
                 <table class="standings-table">
                     <thead>
                         <tr>
-                            <th></th> <th style="width: 60px;">POS</th>
+                            <th></th>
+                            <th style="width: 14px;"></th>
+                            <th style="width: 80px;">POS</th>
                             <th style="text-align: left;">TEAM</th>
                             <th style="width: 100px;">W-L</th>
                             <th style="width: 70px;">%</th>
@@ -178,6 +260,10 @@ class Standings:
                     </thead>
                     <tbody>{rows}</tbody>
                 </table>
+                <div class="legend">
+                    <div class="legend-item"><span class="clinch-x" style="font-size:12px;">X</span> Clinched Playoffs</div>
+                </div>
+
             </div>
         </body>
         </html>

@@ -149,7 +149,10 @@ class WeeklyPerformances:
                         if mins_val == '0' or mins_val == '-': continue
 
                         rating = self._calculate_performance_rating(stats_dict)
-                        athlete_id = athlete['athlete']['id']
+                        athlete_id = athlete['athlete'].get('id', '')
+
+                        if not athlete_id:
+                            continue
 
                         if athlete_id not in players:
                             players[athlete_id] = {
