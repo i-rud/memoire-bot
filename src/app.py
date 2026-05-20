@@ -454,6 +454,12 @@ def process_top(chat_id, text: str):
     bot.send_message(chat_id, "✅ Batch processing complete!")
 
 
+@bot.message_handler(content_types=['text'])
+def handle_all_private_messages(message):
+    print(f"DEBUG: Получено сообщение в ЛС от {message.chat.id}: {message.text}")
+    bot.reply_to(message, f"Привет! Я тебя вижу. Твой ID: {message.chat.id}")
+
+
 if __name__ == "__main__":
     print("Polling is up...")
     bot.infinity_polling(timeout=120)
