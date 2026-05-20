@@ -11,8 +11,9 @@ class PerformanceSummary:
         self.api_base = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
         self.output_dir = "images/performances"
         os.makedirs(self.output_dir, exist_ok=True)
-        #self.overlay_logo_url = "https://content.sportslogos.net/logos/6/981/full/_nba_playoffs_logo_primary_2022_sportslogosnet-4785.png"
-        self.overlay_logo_url = ""
+        # playin: https://i.ibb.co/pvJ0sZbw/tg-image-3440809921.png
+        # playoffs: https://i.ibb.co/JjQQV6qN/tg-image-799289939.png 
+        self.overlay_logo_url = "https://i.ibb.co/JjQQV6qN/tg-image-799289939.png"
 
     def _calculate_performance_rating(self, s):
         def get_f(key):
@@ -53,7 +54,7 @@ class PerformanceSummary:
         gs = pts + 0.4*fgm - 0.5*fga - 0.3*(fta-ftm) + 0.7*orb + 0.3*drb + stl + 0.7*ast + 0.7*blk - 0.4*pf - tov
 
         # 2. PM Impact (balanced weight: 0.4, normalized by minutes)
-        pm_impact = 0.4 * pm * (mins / 48.0)
+        pm_impact = 0.15 * pm * (mins / 48.0)
 
         raw_score = gs + pm_impact
 
@@ -120,7 +121,7 @@ class PerformanceSummary:
         ts_pct = round((pts / ts_denom * 100) if ts_denom > 0 else 0, 1)
         
         # Color coding for +/-
-        pm_color = "#fff"
+        pm_color = "#2b2624"
         if pm and pm != '0':
             if pm.startswith('+'): pm_color = "#41A67E"
             elif pm.startswith('-'): pm_color = "#A63A2F"
@@ -139,7 +140,8 @@ class PerformanceSummary:
 
         # Dynamic Primary Stats
         top_stats = [{'val': pts, 'lbl': 'pts'}]
-        candidates = [{'val': reb, 'lbl': 'reb'}, {'val': ast, 'lbl': 'ast'}, {'val': stl, 'lbl': 'stl'}, {'val': blk, 'lbl': 'blk'}]
+        # Order dictates priority on tie: reb > blk > stl > ast
+        candidates = [{'val': reb, 'lbl': 'reb'}, {'val': blk, 'lbl': 'blk'}, {'val': stl, 'lbl': 'stl'}, {'val': ast, 'lbl': 'ast'}]
         qualifying = sorted([c for c in candidates if c['val'] >= 3], key=lambda x: x['val'], reverse=True)
         top_stats.extend(qualifying[:2])
         if len(top_stats) < 3 and fg_pct >= 50.0: top_stats.append({'val': f"{fg_pct}%", 'lbl': 'fg%'})
@@ -369,7 +371,6 @@ class PerformanceSummary:
                         top: 10px;
                         right: 40px;
                         width: 150px;
-                        height: 150px;
                         object-fit: contain;
                         z-index: 100;
                     }}
@@ -725,7 +726,7 @@ class PerformanceSummary:
                         
                         all_top_candidates.append(player_data)
 
-                        if rating >= 9.0:
+                        if rating >= 0.0:
                             print(f"Генерация: {player_data['name']} ({rating} score)")
                             html = self._generate_html(player_data, processed, date_str, team_logo, home_data, away_data)
                             page.set_content(html)
@@ -844,7 +845,6 @@ class PerformanceSummary:
             <div class="container">
                 <img class="bg-photo" src="file://{abs_photo}" />
                 <div class="gradient-overlay"></div>
-                <div class="grain-overlay"></div>
                 <img class="card-img" src="file://{abs_card}" />
             </div>
         </body>

@@ -16,8 +16,12 @@ from performance_2 import Performance
 from performance import Performance as PerformanceElite
 from media import MediaLoader
 from schedule import Schedule
+from play_in import PlayInSchedule
+from play_in_scores import PlayInScores
 from all_performances import PerformanceSummary
 from weekly_performances import WeeklyPerformances
+from round_performances import RoundPerformances
+from playoff_bracket import PlayoffBracket
 
 DT_FORMAT = "%Y%m%d"
 TOKEN = os.environ.get("TOKEN", "")
@@ -25,15 +29,17 @@ CHANNEL_ID = int(os.environ.get("CHANNEL_ID", 0))
 
 bot = telebot.TeleBot(TOKEN)
 
-scores = Scores()
+scores = PlayInScores()
 old_scores = OldScores()
 standings = Standings()
 performance = Performance()
 performance_elite = PerformanceElite()
 media_loader = MediaLoader()
-schedule = Schedule()
+schedule = PlayInSchedule()
 performance_all = PerformanceSummary()
 potw = WeeklyPerformances()
+potr = RoundPerformances()
+bracket = PlayoffBracket()
 
 import os
 
@@ -256,6 +262,19 @@ def handle_channel_posts(message):
         process_top(message.chat.id, text)
     if "/potw" in text:
         process_potw(message.chat.id, text)
+    if "/potr" in text:
+        process_potr(message.chat.id, text)
+    if "/bracket" in text:
+        process_bracket(message.chat.id)
+
+def process_bracket(chat_id):
+    bot.send_message(chat_id, "⏳ Generating playoff bracket...")
+    try:
+        bracket.generate()
+        send_and_clear_photos(chat_id, "images/playoff", custom_caption="🏀 NBA Playoff Bracket")
+        bot.send_message(chat_id, "✅ Done")
+    except Exception as e:
+        bot.send_message(chat_id, f"🚫 Error generating playoff bracket: {e}")
 
 def process_potw(chat_id, text: str):
     date = text.split(" ")[1]
@@ -264,6 +283,23 @@ def process_potw(chat_id, text: str):
     potw.fetch_and_aggregate(date)
 
     send_and_clear_photos(chat_id, "images/weekly/players")
+    bot.send_message(chat_id, "✅ Done")
+
+def process_potr(chat_id, text: str):
+    # Format: /potr <round> [date]
+    parts = text.split(" ")
+    n_round = parts[1]
+    
+    # If date is provided, use it. Otherwise use today.
+    if len(parts) > 2:
+        date = parts[2]
+    else:
+        date = datetime.now().strftime("%d.%m")
+
+    bot.send_message(chat_id, f"⏳ Generating Player of the Round {n_round}...")
+    potr.fetch_and_aggregate(date, n_round)
+
+    send_and_clear_photos(chat_id, "images/round_performances")
     bot.send_message(chat_id, "✅ Done")
 
 def process_insta(chat_id, text: str):
@@ -389,16 +425,6 @@ def process_top(chat_id, text: str):
     bot.send_message(chat_id, f"⏳ Generating top performances for {date}...")
     
     mvp = performance_all.fetch_and_generate(date)
-
-    # Send MVP of the Day message (at the start as a teaser)
-    if mvp:
-        mvp_text = (
-            f"🌟 *PLAYER OF THE DAY*\n\n"
-            f"🏀 *{mvp['name']}*\n"
-            f"🔥 *{mvp['rating']}* score | *{mvp['fps']}* fps\n\n"
-            f"📊 {mvp['pts']} PTS, {mvp['ast']} AST, {mvp['reb']} REB, {mvp['stl']} STL"
-        )
-        bot.send_message(chat_id, mvp_text, parse_mode='Markdown')
     
     base_dir = "images/performances"
     if not os.path.exists(base_dir):
@@ -422,6 +448,8 @@ def process_top(chat_id, text: str):
                 os.rmdir(folder_path)
             except Exception as e:
                 print(f"Could not remove folder {folder_path}: {e}")
+
+    send_and_clear_photos(chat_id, "images/performances")
 
     bot.send_message(chat_id, "✅ Batch processing complete!")
 

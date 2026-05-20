@@ -5,14 +5,14 @@ import base64
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 
-LOGO = "https://i.ibb.co/vvLV57QX/2025-12-28-13-00-53.jpg"
+# Playoff logo URL from all_performances
+PLAYOFF_LOGO = "https://i.ibb.co/JjQQV6qN/tg-image-799289939.png"
 
-class WeeklyPerformances:
+class RoundPerformances:
     def __init__(self):
         self.api_base = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-        self.output_dir = "images/weekly"
+        self.output_dir = "images/round_performances"
         os.makedirs(self.output_dir, exist_ok=True)
-        self.overlay_logo_url = ""
         self.team_conferences = {
             'ATL': 'east', 'BOS': 'east', 'BKN': 'east', 'CHA': 'east', 'CHI': 'east',
             'CLE': 'east', 'DET': 'east', 'IND': 'east', 'MIA': 'east', 'MIL': 'east',
@@ -20,6 +20,12 @@ class WeeklyPerformances:
             'DAL': 'west', 'DEN': 'west', 'GSW': 'west', 'GS': 'west', 'HOU': 'west', 'LAC': 'west',
             'LAL': 'west', 'MEM': 'west', 'MIN': 'west', 'NOP': 'west', 'NO': 'west', 'OKC': 'west',
             'PHX': 'west', 'PHO': 'west', 'POR': 'west', 'SAC': 'west', 'SAS': 'west', 'SA': 'west', 'UTA': 'west'
+        }
+        self.round_map = {
+            "1": "RD16",  # First Round
+            "2": "QTR",   # Conference Semifinals
+            "3": "SEMI",  # Conference Finals
+            "4": "FINAL"  # NBA Finals
         }
 
     def _calculate_performance_rating(self, s):
@@ -46,7 +52,7 @@ class WeeklyPerformances:
         if orb == 0 and drb == 0 and total_reb > 0:
             orb = total_reb * 0.3
             drb = total_reb * 0.7
-
+        
         # FGM/FGA
         fgs = s.get('fieldGoalsMade-fieldGoalsAttempted', '0-0').split('-')
         fgm = float(fgs[0]) if len(fgs) > 0 else 0.0
@@ -81,36 +87,50 @@ class WeeklyPerformances:
     def parse_date(self, date_str):
         if "." in date_str:
             day, month = date_str.split(".")
-            # Assuming current year (2026) for DD.MM format
             return datetime(2026, int(month), int(day))
         else:
             return datetime.strptime(date_str, "%Y%m%d")
 
-    def fetch_and_aggregate(self, end_date_str):
+    def fetch_and_aggregate(self, end_date_str, n_round):
         end_dt = self.parse_date(end_date_str)
-        start_dt = end_dt - timedelta(days=7) # To get exactly the window size e.g. 9 to 16 (8 dates)
+        # Scan last 21 days for the specified round
+        start_dt = end_dt - timedelta(days=21) 
+        
+        target_round_abbrev = self.round_map.get(str(n_round), "RD16")
         
         curr_dt = start_dt
         dates_to_fetch = []
-        while curr_dt < end_dt:
+        while curr_dt <= end_dt:
             dates_to_fetch.append(curr_dt.strftime("%Y%m%d"))
             curr_dt += timedelta(days=1)
 
-        print(f"Сканируем матчи с {start_dt.strftime('%d.%m')} по {end_dt.strftime('%d.%m')} ({len(dates_to_fetch)} дней)...")
+        print(f"Сканируем матчи Раунда {n_round} ({target_round_abbrev}) с {start_dt.strftime('%d.%m')} по {end_dt.strftime('%d.%m')}...")
 
         players = {} # athlete_id -> dict
 
         for d_str in dates_to_fetch:
-            scoreboard = requests.get(f"{self.api_base}/scoreboard?dates={d_str}").json()
+            try:
+                scoreboard = requests.get(f"{self.api_base}/scoreboard?dates={d_str}").json()
+            except:
+                continue
+                
             events = scoreboard.get('events', [])
             
             for event in events:
+                comp_data = event['competitions'][0]
+                # Filter by round
+                game_round = comp_data.get('type', {}).get('abbreviation', '')
+                if game_round != target_round_abbrev:
+                    continue
+
                 game_id = event['id']
-                summary = requests.get(f"{self.api_base}/summary?event={game_id}").json()
+                try:
+                    summary = requests.get(f"{self.api_base}/summary?event={game_id}").json()
+                except:
+                    continue
                 
                 if not summary.get('boxscore', {}).get('teams'): continue
 
-                # Identify Home and Away and Score
                 header_comps = summary.get('header', {}).get('competitions', [{}])[0].get('competitors', [])
                 home_data, away_data = {}, {}
                 for comp in header_comps:
@@ -127,7 +147,6 @@ class WeeklyPerformances:
                     team_abbrev = stat_group['team']['abbreviation']
                     team_logo = stat_group['team']['logo']
 
-                    # Check Win/Loss
                     team_won = False
                     if team_abbrev == home_data.get('abbrev'):
                         team_won = home_data.get('score', 0) > away_data.get('score', 0)
@@ -137,22 +156,15 @@ class WeeklyPerformances:
                     for athlete in stat_group['statistics'][0]['athletes']:
                         stats_data = athlete.get('stats', [])
                         if not stats_data: continue
-
-                        # Missing minutes means DNP
-                        if '0' in stats_data and labels[0] == 'minutes' and len(stats_data) == 1:
-                            continue
                         
                         stats_dict = dict(zip(labels, stats_data))
-                        
-                        # Only count if minutes actually > 0
                         mins_val = stats_dict.get('minutes', '0')
                         if mins_val == '0' or mins_val == '-': continue
 
                         rating = self._calculate_performance_rating(stats_dict)
                         athlete_id = athlete['athlete'].get('id', '')
 
-                        if not athlete_id:
-                            continue
+                        if not athlete_id: continue
 
                         if athlete_id not in players:
                             players[athlete_id] = {
@@ -167,7 +179,7 @@ class WeeklyPerformances:
                             }
 
                         p = players[athlete_id]
-                        p['team_logo'] = team_logo # Most recent logo
+                        p['team_logo'] = team_logo
                         p['team_abbrev'] = team_abbrev
                         p['gp'] += 1
                         if team_won: p['wins'] += 1
@@ -195,7 +207,6 @@ class WeeklyPerformances:
                         p['tfgm'] += float(tfgs[0]) if len(tfgs) > 0 else 0.0
                         p['tfga'] += float(tfgs[1]) if len(tfgs) > 1 else 0.0
 
-        # Calculate averages
         for p_id, p in players.items():
             gp = p['gp']
             if gp > 0:
@@ -209,45 +220,34 @@ class WeeklyPerformances:
                 p['fg_pct'] = round((p['fgm'] / p['fga'] * 100) if p['fga'] > 0 else 0, 1)
                 p['tfg_pct'] = round((p['tfgm'] / p['tfga'] * 100) if p['tfga'] > 0 else 0, 1)
 
-        # Sort by average rating and pick top 5 for East and West
-        east_players = [p for p in players.values() if p['gp'] >= 3 and self.team_conferences.get(p.get('team_abbrev', ''), 'west') == 'east']
-        west_players = [p for p in players.values() if p['gp'] >= 3 and self.team_conferences.get(p.get('team_abbrev', ''), 'west') == 'west']
+        # Sort and pick top players by conference
+        east_players = [p for p in players.values() if p['gp'] >= 2 and self.team_conferences.get(p.get('team_abbrev', ''), 'west') == 'east']
+        west_players = [p for p in players.values() if p['gp'] >= 2 and self.team_conferences.get(p.get('team_abbrev', ''), 'west') == 'west']
 
         top_east = sorted(east_players, key=lambda x: x['avg_rating'], reverse=True)[:5]
         top_west = sorted(west_players, key=lambda x: x['avg_rating'], reverse=True)[:5]
         
-        self.generate_cards(top_east, start_dt, end_dt, "east")
-        self.generate_cards(top_west, start_dt, end_dt, "west")
+        self.generate_cards(top_east, n_round, "east")
+        self.generate_cards(top_west, n_round, "west")
 
-    def generate_cards(self, top_players, start_dt, end_dt, conf):
-        print(f"Генерация {len(top_players)} недельных карточек для {conf}...")
+    def generate_cards(self, top_players, n_round, conf):
+        print(f"Генерация {len(top_players)} карточек раунда для {conf}...")
         
-        date_range_str = f"{start_dt.strftime('%B %d')} - {end_dt.strftime('%B %d, %Y')}".upper()
+        # New date format: 2026 – ROUND {n_round}
+        date_header_str = f"2026 — ROUND {n_round}".upper()
         
-        logo_path = os.path.join(os.path.dirname(__file__), 'images', 'weekly', 'potw', f'{conf}.png')
-        potw_logo = ""
-        try:
-            with open(logo_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode()
-            potw_logo = f"data:image/png;base64,{encoded_string}"
-        except Exception as e:
-            print(f"Could not load POTW logo for {conf} at {logo_path}: {e}")
-            potw_logo = ""
-
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page(device_scale_factor=2)
 
             for i, p_data in enumerate(top_players):
-                # Calculate Score Badge Color
                 r_val = float(p_data["avg_rating"])
-                score_bg = "#A63A2F" # <= 6: Red
-                if r_val >= 9: score_bg = "#0068B9" # 9+: Deep Blue
-                elif r_val >= 8: score_bg = "#00929C" # 8-9: Cyan Blue
-                elif r_val >= 7: score_bg = "#41A67E" # 7-8: Green
-                elif r_val > 6: score_bg = "#BF8B33" # 6-7: Orange
+                score_bg = "#A63A2F"
+                if r_val >= 9: score_bg = "#0068B9"
+                elif r_val >= 8: score_bg = "#00929C"
+                elif r_val >= 7: score_bg = "#41A67E"
+                elif r_val > 6: score_bg = "#BF8B33"
                 
-                # Grid Stats (All stats shown unconditionally)
                 grid_stats = []
                 grid_stats.append(f'<div class="stat-col"><span class="s-val badge-val" style="background: {score_bg};">{"%.2f" % r_val}</span></div>')
                 grid_stats.append(f'<div class="stat-col"><span class="s-val">{p_data["ppg"]}</span><span class="s-lbl">PPG</span></div>')
@@ -258,14 +258,14 @@ class WeeklyPerformances:
                 grid_stats.append(f'<div class="stat-col"><span class="s-val">{p_data["fg_pct"]}</span><span class="s-lbl">FG%</span></div>')
                 grid_stats.append(f'<div class="stat-col"><span class="s-val">{p_data["tfg_pct"]}</span><span class="s-lbl">3FG%</span></div>')
                 
-                # Add Total +/-
                 pm_val = f"+{p_data['total_pm']}" if p_data['total_pm'] > 0 else str(p_data['total_pm'])
                 pm_color = "#41A67E" if p_data['total_pm'] > 0 else ("#A63A2F" if p_data['total_pm'] < 0 else "var(--text-main)")
                 grid_stats.append(f'<div class="stat-col"><span class="s-val" style="color: {pm_color};">{pm_val}</span><span class="s-lbl">+/-</span></div>')
                 
                 grid_stats.append(f'<div class="stat-col"><span class="s-val">{p_data["wins"]}-{p_data["losses"]}</span><span class="s-lbl">W-L</span></div>')
 
-                potw_img_tag = f'<img src="{potw_logo}" class="potw-logo">' if potw_logo else ""
+                # Using PLAYOFF_LOGO as overlay
+                overlay_img_tag = f'<img src="{PLAYOFF_LOGO}" class="playoff-logo">'
 
                 html_content = f"""
                 <!DOCTYPE html>
@@ -284,7 +284,7 @@ class WeeklyPerformances:
                         body {{ font-family: 'Unbounded', sans-serif; background: #ddd; display: flex; justify-content: center; align-items: center; min-height: 100vh; }}
                         
                         .card {{ width: 1000px; background: var(--bg); padding: 30px 40px 40px 40px; display: flex; flex-direction: column; gap: 20px; position: relative; }}
-                        .potw-logo {{ position: absolute; top: -35px; right: 20px; width: 240px; height: 240px; object-fit: contain; z-index: 10; opacity: 1; }}
+                        .playoff-logo {{ position: absolute; top: 10px; right: 40px; width: 150px; object-fit: contain; z-index: 100; }}
 
                         .header {{ display: flex; align-items: center; justify-content: space-between; width: 100%; }}
                         .header-left {{ display: flex; align-items: center; gap: 25px; max-width: 680px; }}
@@ -308,7 +308,7 @@ class WeeklyPerformances:
                 </head>
                 <body>
                     <div class="card player-card">
-                        {potw_img_tag}
+                        {overlay_img_tag}
                         <div class="header">
                             <div class="header-left">
                                 <div class="photo-wrapper">
@@ -323,7 +323,7 @@ class WeeklyPerformances:
                                     <div class="name-line">
                                         <span class="name">{p_data['name']}</span>
                                     </div>
-                                    <div class="date-header">{date_range_str}</div>
+                                    <div class="date-header">{date_header_str}</div>
                                 </div>
                             </div>
                         </div>
@@ -339,12 +339,16 @@ class WeeklyPerformances:
                 page.wait_for_timeout(500)
                 
                 safe_name = p_data['name'].replace(' ', '_').replace("'", "")
-                page.locator(".player-card").screenshot(path=f"{self.output_dir}/players/top_{conf}_{i+1}_{safe_name}.png")
+                page.locator(".player-card").screenshot(path=f"{self.output_dir}/top_{conf}_{i+1}_{safe_name}.png")
                 print(f"[{conf.upper()} {i+1}] {p_data['name']} сохранен.")
 
             browser.close()
-            print("Все карточки сохранены в images/weekly!")
+            print(f"Все карточки сохранены в {self.output_dir}!")
 
 if __name__ == "__main__":
-    wp = WeeklyPerformances()
-    wp.fetch_and_aggregate("16.03")
+    import sys
+    date = sys.argv[1] if len(sys.argv) > 1 else "21.04"
+    n_round = sys.argv[2] if len(sys.argv) > 2 else "1"
+    
+    rp = RoundPerformances()
+    rp.fetch_and_aggregate(date, n_round)

@@ -14,9 +14,11 @@ class Standings:
 
     def get_standings_data(self):
         response = requests.get(API_URL).json()
+        print(f"API Response keys: {response.keys()}")
         conferences = []
 
         for group in response.get('children', []):
+            print(f"Processing conference: {group.get('name')}")
             conf_data = {
                 "name": group['name'],
                 "slug": group['name'].lower().replace("ern conference", "").strip(),
@@ -50,8 +52,10 @@ class Standings:
 
     def calculate_clinch_status(self, teams: list) -> list:
         """
-        Помечает команды, гарантированно попавшие в прямой плей-офф (топ-6).
-        Поле 'clinched': True / False
+        Помечает команды статусами:
+        'clinched' (x): Гарантированный ТОП-6 (Плей-офф).
+        'playin' (o): Гарантированный ТОП 7-10 (Плей-ин), нет шансов на топ-6 и нет риска вылететь.
+        'eliminated' (e): Нет шансов даже на Плей-ин (11-15 место).
         """
 
         def games_remaining(team):
@@ -60,16 +64,40 @@ class Standings:
         sorted_teams = sorted(teams, key=lambda t: (t['seed'], -t['pct_raw']))
         n = len(sorted_teams)
 
-        team_at_7 = sorted_teams[PLAYOFF_CUTOFF] if n > PLAYOFF_CUTOFF else None
+        # Ориентиры
+        team_at_6 = sorted_teams[5] if n > 5 else None
+        team_at_7 = sorted_teams[6] if n > 6 else None
+        team_at_10 = sorted_teams[9] if n > 9 else None
+        team_at_11 = sorted_teams[10] if n > 10 else None
 
         for team in sorted_teams:
+            gr_team = games_remaining(team)
+            
+            # 1. Clinched Playoffs (X)
             clinched = False
             if team_at_7:
                 gr_7 = games_remaining(team_at_7)
-                # Даже если 7-я выиграет все оставшиеся — не догонит нас
-                if team['wins_raw'] >= team_at_7['wins_raw'] + gr_7:
+                if team['wins_raw'] > team_at_7['wins_raw'] + gr_7:
                     clinched = True
             team['clinched'] = clinched
+
+            # 2. Eliminated (E)
+            eliminated = False
+            if team_at_10:
+                if team['wins_raw'] + gr_team < team_at_10['wins_raw']:
+                    eliminated = True
+            team['eliminated'] = eliminated
+
+            # 3. Play-In Guaranteed (O)
+            playin = False
+            if team_at_6 and team_at_11:
+                gr_11 = games_remaining(team_at_11)
+                # Не может догнать 6-го и не может быть догнан 11-м
+                cannot_reach_6 = team['wins_raw'] + gr_team < team_at_6['wins_raw']
+                cannot_fall_below_10 = team['wins_raw'] > team_at_11['wins_raw'] + gr_11
+                if cannot_reach_6 and cannot_fall_below_10:
+                    playin = True
+            team['playin'] = playin
 
         return sorted_teams
 
@@ -81,10 +109,14 @@ class Standings:
             display_rank = t['seed'] if t['seed'] < 99 else idx
             zone_class = "playoff-zone" if display_rank <= 6 else "playin-zone" if display_rank <= 10 else ""
 
-            # Жирный X для команд, гарантированно попавших в плей-офф
+            # Иконки статуса
             clinch_html = ""
             if t.get('clinched'):
-                clinch_html = '<span class="clinch-x">X</span>'
+                clinch_html = '<span class="status-icon status-x">x</span>'
+            elif t.get('playin'):
+                clinch_html = '<span class="status-icon status-o">pi</span>'
+            elif t.get('eliminated'):
+                clinch_html = '<span class="status-icon status-e">o</span>'
 
             # Логика группировки названий зон
             zone_label_html = ""
@@ -134,6 +166,9 @@ class Standings:
                     --text-muted: #8e8a7e;
                     --accent: {conf_color[conf['name']]};
                     --divider: #8e8a7e;
+                    --status-green: #166534;
+                    --status-orange: #92400e;
+                    --status-red: var(--text-muted);
                 }}
                 body {{ font-family: 'Unbounded', sans-serif; background: var(--bg); padding: 40px; display: flex; justify-content: center; margin: 0; }}
 
@@ -201,32 +236,34 @@ class Standings:
                     vertical-align: middle;
                 }}
 
-                .clinch-x {{
+                .status-icon {{
                     display: inline-block;
-                    font-size: 11px;
-                    font-weight: 900;
-                    color: #166534;
-                    margin-left: 5px;
+                    font-size: 13px;
+                    font-weight: 600;
                     vertical-align: middle;
                     text-align: center;
-                    letter-spacing: 0;
+                    text-transform: lowercase;
                 }}
+                .status-x {{ color: var(--status-green); }}
+                .status-o {{ color: var(--status-orange); }}
+                .status-e {{ color: var(--status-red); }}
 
 
                 /* Легенда */
                 .legend {{
                     display: flex;
-                    gap: 20px;
+                    gap: 30px;
                     justify-content: center;
-                    margin-top: 28px;
+                    margin-top: 35px;
                     padding-top: 20px;
+                    border-top: 1px solid rgba(0,0,0,0.05);
                 }}
                 .legend-item {{
                     display: flex;
                     align-items: center;
-                    gap: 7px;
-                    font-size: 10px;
-                    font-weight: 600;
+                    gap: 8px;
+                    font-size: 9px;
+                    font-weight: 700;
                     letter-spacing: 1px;
                     text-transform: uppercase;
                     color: var(--text-muted);
@@ -261,7 +298,9 @@ class Standings:
                     <tbody>{rows}</tbody>
                 </table>
                 <div class="legend">
-                    <div class="legend-item"><span class="clinch-x" style="font-size:12px;">X</span> Clinched Playoffs</div>
+                    <div class="legend-item"><span class="status-icon status-x">x</span> Clinched Playoffs</div>
+                    <div class="legend-item"><span class="status-icon status-o">pi</span> Clinched Play-In</div>
+                    <div class="legend-item"><span class="status-icon status-e">o</span> Eliminated</div>
                 </div>
 
             </div>
@@ -285,3 +324,6 @@ class Standings:
                     card.screenshot(path=filename)
                     print(f"Loaded: {filename}")
             browser.close()
+
+# if __name__ == "__main__":
+#     Standings().generate()
